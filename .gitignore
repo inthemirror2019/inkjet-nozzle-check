@@ -1,0 +1,18 @@
+# 本机配置：含打印机队列名与内网 IP，请从 config.example.json 复制
+# Local config: contains printer queue name and LAN IP. Copy from config.example.json
+config.json
+
+# 运行时状态与日志 / Runtime state and logs
+state.json
+state.json.tmp
+logs/
+
+# 生成物，由脚本重新生成 / Generated artifacts, recreated by the scripts
+icon.ico
+preview.png
+
+# 临时调试脚本 / Scratch scripts
+_*.ps1
+
+# 本地工具设置 / Local tooling settings
+.claude/

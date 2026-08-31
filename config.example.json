@@ -1,0 +1,14 @@
+{
+  "printerName": "YOUR_PRINTER_QUEUE_NAME",
+  "fallbackPrinterName": "",
+  "printerIP": "",
+  "intervalDays": 7,
+  "dailyCheckTime": "10:00",
+  "bootDelayMinutes": 3,
+  "retryCount": 3,
+  "retryIntervalMinutes": 5,
+  "colorMode": true,
+  "paperSize": "A4",
+  "waitJobTimeoutSeconds": 180,
+  "logKeepMonths": 6
+}
