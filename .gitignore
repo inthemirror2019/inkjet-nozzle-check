@@ -1,6 +1,7 @@
 # 本机配置：含打印机队列名与内网 IP，请从 config.example.json 复制
 # Local config: contains printer queue name and LAN IP. Copy from config.example.json
 config.json
+config.json.tmp
 
 # 运行时状态与日志 / Runtime state and logs
 state.json

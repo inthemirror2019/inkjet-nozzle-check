@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    立即实打一张喷头养护测试页（忽略 7 天间隔），用于验证。
+    立即实打一张喷头养护测试页（忽略打印间隔），用于验证。
 
 .DESCRIPTION
     这会真的走纸、真的耗墨。
@@ -41,7 +41,7 @@ if (-not $printer) {
     Write-Host '打印机不可用，无法打印。请检查：' -ForegroundColor Red
     Write-Host '  1. 打印机是否开机'
     Write-Host '  2. 是否与电脑在同一网络'
-    Write-Host "  3. IP 是否仍是 $($cfg.printerIP)"
+    Write-Host '  3. 选的是否是 WSD 类型的队列（固定 IP 的队列在打印机换 IP 后会失效）'
     Write-Host '  4. 是否缺纸 / 卡纸 / 机盖未关'
     exit 1
 }
@@ -107,7 +107,8 @@ try {
 
         Write-Host ''
         Write-Host '[OK] 打印成功。' -ForegroundColor Green
-        Write-Host "周期已重置，下次自动打印约在：$($now.AddDays($cfg.intervalDays).ToString('yyyy-MM-dd HH:mm'))" -ForegroundColor Green
+        $interval = Get-PrintInterval -Config $cfg
+        Write-Host "周期已重置（间隔 $($interval.Text)），下次自动打印约在：$($now.Add($interval.Span).ToString('yyyy-MM-dd HH:mm'))" -ForegroundColor Green
         Write-Log -Message '手动验证打印成功，周期已重置' -Level OK
     }
 

@@ -3,7 +3,8 @@
     喷墨打印机喷头养护 —— 周期检查并打印测试页。
 
 .DESCRIPTION
-    每次运行都会先判断距上次成功打印是否已满 config.json 里的 intervalDays 天：
+    每次运行都会先判断距上次成功打印是否已满 config.json 里设置的打印间隔
+    （intervalValue + intervalUnit，可按小时或按天）：
       · 未满   —— 记日志后退出，不打印。
       · 已满   —— 检测打印机在线后打印，成功才写入 lastPrintTime。
     只有打印成功才更新 lastPrintTime，因此打印机关机、缺纸、卡纸等失败
@@ -61,17 +62,22 @@ if ($state.lastPrintTime) {
     }
 }
 
+$interval  = Get-PrintInterval -Config $cfg
 $daysSince = $null
-if ($lastPrint) { $daysSince = [math]::Round((New-TimeSpan -Start $lastPrint -End $now).TotalDays, 2) }
+if ($lastPrint) {
+    $elapsed   = New-TimeSpan -Start $lastPrint -End $now
+    $daysSince = [math]::Round($elapsed.TotalDays, 2)
+}
 
 if (-not $lastPrint) {
     $due    = $true
     $reason = '尚无打印记录，作为基准立即打印一次'
 } else {
-    # 容差 0.1 天：避免每天固定时刻检查时因几分钟之差把打印推迟到第 8 天
-    $due = $daysSince -ge ($cfg.intervalDays - 0.1)
-    $reason = if ($due) { "距上次打印已 $daysSince 天，达到 $($cfg.intervalDays) 天周期" }
-              else      { "距上次打印仅 $daysSince 天，未达 $($cfg.intervalDays) 天周期" }
+    # 留一点容差（见 Get-IntervalTolerance），避免整点检查时差几秒就推迟一个检查周期
+    $due       = $elapsed -ge ($interval.Span - (Get-IntervalTolerance -Span $interval.Span))
+    $sinceText = Format-Elapsed -Span $elapsed -Unit $interval.Unit
+    $reason = if ($due) { "距上次打印已 $sinceText，达到 $($interval.Text)周期" }
+              else      { "距上次打印仅 $sinceText，未达 $($interval.Text)周期" }
 }
 
 Write-Log "上次打印：$(if ($lastPrint) { $lastPrint.ToString('yyyy-MM-dd HH:mm:ss') } else { '无' })"
@@ -107,7 +113,7 @@ for ($i = 1; $i -le $attempts; $i++) {
             DaysSince     = $daysSince
             PrinterName   = $printer
             Trigger       = switch ($Trigger) {
-                                'Daily'  { '每日定时检查' }
+                                'Daily'  { '定时检查（每小时）' }
                                 'Boot'   { '开机后补打检查' }
                                 default  { '手动执行' }
                             }
@@ -149,7 +155,7 @@ if ($success) {
     $state.successCount  = [int]$state.successCount + 1
     $state.lastError     = ''
     Save-AppState $state
-    Write-Log "打印成功，下次养护打印时间：$($now.AddDays($cfg.intervalDays).ToString('yyyy-MM-dd')) 之后" 'OK'
+    Write-Log "打印成功，下次养护打印时间：$($now.Add($interval.Span).ToString('yyyy-MM-dd HH:mm')) 之后" 'OK'
     exit 0
 } else {
     $state.failCount = [int]$state.failCount + 1

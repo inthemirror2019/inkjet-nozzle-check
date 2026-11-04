@@ -62,11 +62,11 @@ $fontMono = New-Object System.Drawing.Font('Consolas', 9)
 
 $form                 = New-Object System.Windows.Forms.Form
 $form.Text            = '喷头养护控制台'
-$form.Size            = New-Object System.Drawing.Size(660, 620)
+$form.Size            = New-Object System.Drawing.Size(660, 690)
 $form.StartPosition   = 'CenterScreen'
 $form.Font            = $font
 $form.AutoScaleMode   = 'Font'
-$form.MinimumSize     = New-Object System.Drawing.Size(620, 540)
+$form.MinimumSize     = New-Object System.Drawing.Size(620, 610)
 
 # ---- 状态区 ----
 $grpState          = New-Object System.Windows.Forms.GroupBox
@@ -147,10 +147,59 @@ $btnRefresh.Location = New-Object System.Drawing.Point(472, 74)
 $btnRefresh.Size     = New-Object System.Drawing.Size(130, 28)
 $grpAct.Controls.Add($btnRefresh)
 
+# ---- 设置区 ----
+$grpSet          = New-Object System.Windows.Forms.GroupBox
+$grpSet.Text     = ' 设置（修改后立即保存） '
+$grpSet.Location = New-Object System.Drawing.Point(12, 290)
+$grpSet.Size     = New-Object System.Drawing.Size(620, 62)
+$grpSet.Anchor   = 'Top,Left,Right'
+$form.Controls.Add($grpSet)
+
+$tip = New-Object System.Windows.Forms.ToolTip
+
+$lblPrinter           = New-Object System.Windows.Forms.Label
+$lblPrinter.Text      = '打印机 ：'
+$lblPrinter.Location  = New-Object System.Drawing.Point(14, 26)
+$lblPrinter.Size      = New-Object System.Drawing.Size(74, 20)
+$lblPrinter.TextAlign = 'MiddleRight'
+$grpSet.Controls.Add($lblPrinter)
+
+# 不再手填 IP：直接选系统里的打印队列，地址由队列端口自动获取
+$cboPrinter               = New-Object System.Windows.Forms.ComboBox
+$cboPrinter.DropDownStyle = 'DropDownList'
+$cboPrinter.Location      = New-Object System.Drawing.Point(92, 24)
+$cboPrinter.Size          = New-Object System.Drawing.Size(270, 24)
+$grpSet.Controls.Add($cboPrinter)
+$tip.SetToolTip($cboPrinter, "推荐选标有「WSD」的队列：打印机换 IP 后会自动跟上。`n固定 IP 的队列在路由器重新分配地址后会连不上。")
+
+$lblInterval           = New-Object System.Windows.Forms.Label
+$lblInterval.Text      = '打印间隔 ：'
+$lblInterval.Location  = New-Object System.Drawing.Point(372, 26)
+$lblInterval.Size      = New-Object System.Drawing.Size(80, 20)
+$lblInterval.TextAlign = 'MiddleRight'
+$grpSet.Controls.Add($lblInterval)
+
+$numInterval           = New-Object System.Windows.Forms.NumericUpDown
+$numInterval.Location  = New-Object System.Drawing.Point(456, 24)
+$numInterval.Size      = New-Object System.Drawing.Size(60, 24)
+$numInterval.Minimum   = 1
+$numInterval.Maximum   = 30
+$numInterval.TextAlign = 'Right'
+$grpSet.Controls.Add($numInterval)
+
+$cboUnit               = New-Object System.Windows.Forms.ComboBox
+$cboUnit.DropDownStyle = 'DropDownList'
+$cboUnit.Location      = New-Object System.Drawing.Point(522, 24)
+$cboUnit.Size          = New-Object System.Drawing.Size(80, 24)
+[void] $cboUnit.Items.AddRange(@('小时', '天'))
+$grpSet.Controls.Add($cboUnit)
+$tip.SetToolTip($numInterval, '计划任务每小时检查一次，距上次打印达到这个间隔就自动打印。')
+$tip.SetToolTip($cboUnit,     '按小时：1～72；按天：1～30')
+
 # ---- 输出区 ----
 $grpOut          = New-Object System.Windows.Forms.GroupBox
 $grpOut.Text     = ' 输出 '
-$grpOut.Location = New-Object System.Drawing.Point(12, 290)
+$grpOut.Location = New-Object System.Drawing.Point(12, 360)
 $grpOut.Size     = New-Object System.Drawing.Size(620, 250)
 $grpOut.Anchor   = 'Top,Bottom,Left,Right'
 $form.Controls.Add($grpOut)
@@ -230,17 +279,18 @@ function Update-StateDisplay {
             $last = [datetime]::Parse($state.lastPrintTime,
                         [System.Globalization.CultureInfo]::InvariantCulture,
                         [System.Globalization.DateTimeStyles]::RoundtripKind)
-            $days = ((Get-Date) - $last).TotalDays
+            $interval = Get-PrintInterval -Config $cfg
             $script:valLabels['上次打印'].Text = $last.ToString('yyyy-MM-dd HH:mm')
-            $script:valLabels['距上次'].Text   = ('{0:N2} 天' -f $days)
+            $script:valLabels['距上次'].Text   = Format-Elapsed -Span ((Get-Date) - $last) -Unit $interval.Unit
 
-            $next = $last.AddDays([double] $cfg.intervalDays)
-            $left = ($next - (Get-Date)).TotalDays
-            if ($left -le 0.1) {
-                $script:valLabels['下次打印'].Text      = '已到期，下次检查时会打印'
+            $next = $last.Add($interval.Span)
+            $left = $next - (Get-Date)
+            if ($left -le (Get-IntervalTolerance -Span $interval.Span)) {
+                $script:valLabels['下次打印'].Text      = "已到期（间隔 $($interval.Text)），下次整点检查时会打印"
                 $script:valLabels['下次打印'].ForeColor = [System.Drawing.Color]::FromArgb(200, 90, 0)
             } else {
-                $script:valLabels['下次打印'].Text      = ('{0}（还有 {1:N1} 天）' -f $next.ToString('yyyy-MM-dd HH:mm'), $left)
+                $script:valLabels['下次打印'].Text      = ('{0}（还有 {1}，间隔 {2}）' -f $next.ToString('yyyy-MM-dd HH:mm'),
+                                                              (Format-Elapsed -Span $left -Unit $interval.Unit), $interval.Text)
                 $script:valLabels['下次打印'].ForeColor = [System.Drawing.SystemColors]::ControlText
             }
         } catch {
@@ -283,20 +333,73 @@ function Update-PrinterDisplay {
     $lbl.ForeColor = [System.Drawing.SystemColors]::GrayText
     $form.Refresh()
 
-    $r = Test-PrinterOnline -PrinterName $cfg.printerName -PrinterIP $cfg.printerIP
+    $r = Test-PrinterOnline -PrinterName $cfg.printerName
     if ($r.Online) {
         $lbl.Text      = "$($cfg.printerName)  — 在线，$($r.Reason)"
         $lbl.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 0)
     } else {
-        $lbl.Text      = "$($cfg.printerName)  — 不可用：$($r.Reason)"
-        $lbl.ForeColor = [System.Drawing.Color]::FromArgb(180, 0, 0)
+        # 和实际打印走同样的回退逻辑（Resolve-Printer），否则会出现
+        # 「显示不可用，但打印照样成功」的误导
+        $fb = $cfg.fallbackPrinterName
+        $rf = if ($fb -and $fb -ne $cfg.printerName) { Test-PrinterOnline -PrinterName $fb } else { $null }
+        if ($rf -and $rf.Online) {
+            $lbl.Text      = "可以打印：主队列不可用，将改用备用队列「$fb」（主队列：$($r.Reason)）"
+            $lbl.ForeColor = [System.Drawing.Color]::FromArgb(200, 90, 0)
+        } else {
+            $lbl.Text      = "$($cfg.printerName)  — 不可用：$($r.Reason)"
+            $lbl.ForeColor = [System.Drawing.Color]::FromArgb(180, 0, 0)
+        }
+    }
+    # 原因可能很长，标签显示不全，鼠标悬停看全文
+    $tip.SetToolTip($lbl, $lbl.Text)
+}
+
+# 把 config.json 里的当前设置填进设置区的控件；$script:loadingSettings 防止填值时触发保存
+function Initialize-SettingsControls {
+    $script:loadingSettings = $true
+    try {
+        $cfg = Get-AppConfig
+
+        $cboPrinter.Items.Clear()
+        $script:printerNames = @()
+        foreach ($p in @(Get-PhysicalPrinters)) {
+            $script:printerNames += $p.Name
+            $suffix = if ($p.IsWsd) { '（WSD，自动跟随 IP）' } else { '' }
+            [void] $cboPrinter.Items.Add("$($p.Name)$suffix")
+        }
+        # 配置里的队列已被删除时也列出来，免得界面上看不出当前选的是什么
+        if ($cfg.printerName -and $script:printerNames -notcontains $cfg.printerName) {
+            $script:printerNames += $cfg.printerName
+            [void] $cboPrinter.Items.Add("$($cfg.printerName)（系统中未找到）")
+        }
+        $cboPrinter.SelectedIndex = [array]::IndexOf($script:printerNames, [string] $cfg.printerName)
+
+        $interval = Get-PrintInterval -Config $cfg
+        $cboUnit.SelectedIndex = if ($interval.Unit -eq 'hours') { 0 } else { 1 }
+        $numInterval.Maximum   = if ($interval.Unit -eq 'hours') { 72 } else { 30 }
+        $numInterval.Value     = [decimal] [math]::Min($numInterval.Maximum, [math]::Max(1, [math]::Round($interval.Value)))
+    } finally {
+        $script:loadingSettings = $false
+    }
+}
+
+function Save-IntervalSetting {
+    if ($script:loadingSettings) { return }
+    $unit = if ($cboUnit.SelectedIndex -eq 0) { 'hours' } else { 'days' }
+    try {
+        Set-PrintInterval -Config (Get-AppConfig) -Value ([int] $numInterval.Value) -Unit $unit
+        Write-Out "打印间隔已改为 $((Get-PrintInterval -Config (Get-AppConfig)).Text)，立即生效"
+        Update-StateDisplay
+    } catch {
+        Write-Out "保存打印间隔失败：$($_.Exception.Message)"
     }
 }
 
 function Set-Busy {
     param([bool] $On, [string] $What = '')
     $script:busy = $On
-    foreach ($b in @($btnPrint, $btnCycle, $btnDry, $btnPreview, $btnRefresh)) {
+    foreach ($b in @($btnPrint, $btnCycle, $btnDry, $btnPreview, $btnRefresh,
+                     $cboPrinter, $numInterval, $cboUnit)) {
         $b.Enabled = -not $On
     }
     $chkKeep.Enabled = -not $On
@@ -394,7 +497,7 @@ $btnPrint.Add_Click({
     $cfg = Get-AppConfig
     $keep = $chkKeep.Checked
     $msg  = "即将立即打印 1 张 A4 彩色测试页，会消耗纸张和墨水。`n`n打印机：$($cfg.printerName)"
-    $msg += if ($keep) { "`n养护周期：保持不变" } else { "`n养护周期：重置，从现在起重新计算 $($cfg.intervalDays) 天" }
+    $msg += if ($keep) { "`n养护周期：保持不变" } else { "`n养护周期：重置，从现在起重新计算 $((Get-PrintInterval -Config $cfg).Text)" }
     $msg += "`n`n继续？"
 
     $r = [System.Windows.Forms.MessageBox]::Show($msg, '确认打印',
@@ -411,8 +514,37 @@ $btnPrint.Add_Click({
 $btnCycle.Add_Click({
     Start-Child -ScriptName 'Invoke-NozzleCheck.ps1' `
                 -Arguments @('-Trigger', 'Manual') `
-                -Label '按周期检查（满 7 天才打印）'
+                -Label "按周期检查（满 $((Get-PrintInterval -Config (Get-AppConfig)).Text) 才打印）"
 })
+
+$cboPrinter.Add_SelectedIndexChanged({
+    if ($script:loadingSettings -or $cboPrinter.SelectedIndex -lt 0) { return }
+    $name = $script:printerNames[$cboPrinter.SelectedIndex]
+    try {
+        $cfg = Get-AppConfig
+        if ($cfg.printerName -eq $name) { return }
+        $cfg.printerName = $name
+        Save-AppConfig $cfg
+        Write-Out "打印机已改为：$name"
+        Update-PrinterDisplay
+    } catch {
+        Write-Out "保存打印机设置失败：$($_.Exception.Message)"
+    }
+})
+
+$cboUnit.Add_SelectedIndexChanged({
+    if ($script:loadingSettings) { return }
+    # 切换单位时调整上限；先挡住 ValueChanged，最后统一保存一次
+    $script:loadingSettings = $true
+    try {
+        $numInterval.Maximum = if ($cboUnit.SelectedIndex -eq 0) { 72 } else { 30 }
+    } finally {
+        $script:loadingSettings = $false
+    }
+    Save-IntervalSetting
+})
+
+$numInterval.Add_ValueChanged({ Save-IntervalSetting })
 
 $btnDry.Add_Click({
     Start-Child -ScriptName 'Invoke-NozzleCheck.ps1' `
@@ -462,6 +594,7 @@ $form.Add_Shown({
     Write-Out '喷头养护控制台已就绪。' -NoTime
     Write-Out ('工作目录：' + $script:root) -NoTime
     Write-Out '' -NoTime
+    Initialize-SettingsControls
     Update-StateDisplay
     Update-PrinterDisplay
 })

@@ -1,8 +1,8 @@
 {
   "printerName": "YOUR_PRINTER_QUEUE_NAME",
   "fallbackPrinterName": "",
-  "printerIP": "",
-  "intervalDays": 7,
+  "intervalValue": 7,
+  "intervalUnit": "days",
   "dailyCheckTime": "10:00",
   "bootDelayMinutes": 3,
   "retryCount": 3,
