@@ -16,8 +16,8 @@ A zero-dependency Windows utility that prints one four-colour test page per week
 
 难点在于：家用电脑不是服务器，不会一直开着。固定"每周三 10 点打印"这种计划任务，一旦那天没开机就整周跳过。所以本工具的调度逻辑是**按间隔而非按日期**：
 
-- 每天检查一次 + 每次登录后检查一次
-- 距上次**成功**打印满 7 天才打印，未满则跳过（不重复打印）
+- 每小时检查一次 + 每次登录后检查一次
+- 距上次**成功**打印达到设定间隔（默认 7 天，可在界面里按小时或按天修改）才打印，未满则跳过（不重复打印）
 - 电脑关机错过的检查，会在下次开机时补上（超期立刻打印）
 - 打印失败（缺纸、卡纸、打印机离线）**不会**推进计时，下次触发继续尝试
 
@@ -26,7 +26,7 @@ A zero-dependency Windows utility that prints one four-colour test page per week
 - **零依赖**：只用 Windows 自带的 PowerShell 5.1 + .NET GDI+，不需要 Python / Pillow / 浏览器 / Office
 - **覆盖全部墨水通道**：单页含纯 K/C/M/Y 色块、复合 R/G/B、四条渐变条、细线断线检测栅格、黑色文字样张
 - **真正确认打印完成**：不只是提交任务，而是轮询打印队列直到作业离开队列，遇到 `Error / Blocked / Offline / PaperOut` 直接报错
-- **打印机在线检测**：先 ping IP（能识别整机断电），再查 `WorkOffline` / `PrinterStatus` / `DetectedErrorState`（缺纸、卡纸、机盖未关等）
+- **打印机在线检测**：地址从打印队列端口自动获取（WSD 队列会跟随 IP 变化，无需手填 IP），先 ping、不通再试 9100/631/80 端口（能识别整机断电），再查 `WorkOffline` / `PrinterStatus` / `DetectedErrorState`（缺纸、卡纸、机盖未关等）
 - **图形界面**：查看状态、手动立即打印、生成预览、查看日志，长任务在子进程里跑，界面不会卡死
 - **桌面快捷方式**：带手绘的四色墨条图标（16/32/48/64/128 五种尺寸）
 - **幂等**：重复安装计划任务、重复触发都安全
@@ -65,9 +65,9 @@ Get-Printer | Select-Object Name, PortName, PrinterStatus
 
 ```jsonc
 {
-  "printerName": "EPSON XXXX Series",   // 必填：上一步查到的队列名
-  "printerIP": "192.168.1.100",         // 网络打印机填 IP，USB 打印机留空字符串
-  "intervalDays": 7,
+  "printerName": "EPSON XXXX Series",   // 必填：上一步查到的队列名（也可以在界面里下拉选择），网络打印机优先选 WSD 端口的队列
+  "intervalValue": 7,                   // 打印间隔，也可以在界面里修改
+  "intervalUnit": "days",               // "days" 或 "hours"
   "dailyCheckTime": "10:00"
 }
 ```
@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\Test-Run.ps1
 powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1
 ```
 
-会注册两个任务：每天定时检查一次，以及每次登录后延迟几分钟检查一次。
+会注册两个任务：每小时检查一次，以及每次登录后延迟几分钟检查一次。之后在界面里改打印间隔、换打印机都立即生效，无需重装任务。
 
 **7. 创建桌面快捷方式（可选）**
 
@@ -166,9 +166,9 @@ powershell -ExecutionPolicy Bypass -File .\New-Shortcut.ps1
 |---|---|---|
 | `printerName` | — | 打印机队列名，必填 |
 | `fallbackPrinterName` | `""` | 备用队列名，主队列找不到时尝试 |
-| `printerIP` | `""` | 网络打印机 IP，用于 ping 检测；USB 留空 |
-| `intervalDays` | `7` | 打印间隔天数 |
-| `dailyCheckTime` | `"10:00"` | 每日检查时刻 |
+| `intervalValue` | `7` | 打印间隔数值（界面可改） |
+| `intervalUnit` | `"days"` | 间隔单位：`"days"`（1～30）或 `"hours"`（1～72）。旧配置的 `intervalDays` 仍兼容 |
+| `dailyCheckTime` | `"10:00"` | 每小时检查的起算时刻 |
 | `bootDelayMinutes` | `3` | 登录后延迟几分钟再检查（等网络就绪） |
 | `retryCount` | `3` | 单次检查内的重试次数 |
 | `retryIntervalMinutes` | `5` | 重试间隔 |
@@ -180,11 +180,11 @@ powershell -ExecutionPolicy Bypass -File .\New-Shortcut.ps1
 ### 调度机制
 
 ```
-每日触发 (10:00) ─┐
+每小时触发       ─┐
                   ├→ Invoke-NozzleCheck.ps1 ─→ 读 state.json
 登录触发 (+3min) ─┘                              │
                                                  ↓
-                                    距上次成功打印 ≥ 7 天？
+                                    距上次成功打印 ≥ 设定间隔？
                                        ├─ 否 → 跳过，退出
                                        └─ 是 → 检测打印机在线
                                                  ├─ 离线 → 记日志，不推进计时
@@ -196,7 +196,7 @@ powershell -ExecutionPolicy Bypass -File .\New-Shortcut.ps1
 两个关键设计：
 
 - **只有成功打印才推进 `lastPrintTime`**。缺纸、卡纸、打印机断电这些失败都不消耗养护周期，下次触发自然重试。
-- **0.1 天容差**：判断条件是 `daysSince >= intervalDays - 0.1`。否则"上次 10:07 打印，今天 10:07 检查 = 6.9999 天"会把打印推到第 8 天。
+- **到期容差**：判断条件是 `已过时间 >= 间隔 - 容差`，容差取间隔的 10%、最多 10 分钟。否则"上次 10:00:05 打印，下次 10:00:02 检查"差几秒没到期，会把打印推迟一整个检查周期。
 
 ### 常见问题
 
@@ -204,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File .\New-Shortcut.ps1
 |---|---|
 | 提示"配置文件是模板" | 复制了 `config.example.json` 但还没填 `printerName` |
 | 找不到打印机 | 用 `Get-Printer` 核对队列名，注意空格和括号要完全一致 |
-| 一直报离线 | 检查 `printerIP`；USB 打印机应把该项留空，否则 ping 永远失败 |
+| 一直报离线，但手动能打印 | 多半是路由器给打印机换了 IP，而选中的队列端口是固定 IP。在界面里改选标有「WSD」的队列即可 |
 | 中文变成乱码 | `.ps1` 文件丢了 UTF-8 BOM，见下方「编码注意」 |
 | 双击 `.vbs` 没反应 | `.vbs` 被改成非 ASCII 内容了，见下方「编码注意」 |
 | 计划任务不执行 | 任务计划程序里确认任务存在且"运行账户"是当前用户；`Install-Task.ps1` 必须用管理员运行 |
@@ -241,8 +241,8 @@ An idle inkjet printer dries ink inside the nozzles. Mild clogging shows up as b
 
 The catch: a home PC isn't a server. A plain "print every Wednesday at 10:00" scheduled task silently skips the entire week if the machine happens to be off that day. So this tool schedules by **elapsed interval, not by date**:
 
-- Checks once a day, plus once shortly after every logon
-- Prints only when 7 days have passed since the last **successful** print
+- Checks once an hour, plus once shortly after every logon
+- Prints only when the configured interval (default 7 days; set in hours or days from the GUI) has passed since the last **successful** print
 - Missed checks are caught up on the next boot — overdue means print now
 - Failures (out of paper, jam, printer offline) do **not** advance the clock, so the next trigger retries
 
@@ -251,7 +251,7 @@ The catch: a home PC isn't a server. A plain "print every Wednesday at 10:00" sc
 - **Zero dependencies** — Windows' built-in PowerShell 5.1 + .NET GDI+ only. No Python, no Pillow, no browser, no Office.
 - **Covers every ink channel** — one page with pure K/C/M/Y patches, composite R/G/B, four gradient ramps, a fine-line nozzle-break grid, and black text samples.
 - **Confirms the print actually completed** — not just "submitted": polls the print queue until the job leaves it, and throws on `Error / Blocked / Offline / PaperOut`.
-- **Printer readiness detection** — pings the IP first (catches a powered-off printer), then checks `WorkOffline`, `PrinterStatus`, and `DetectedErrorState` (out of paper, jam, cover open…).
+- **Printer readiness detection** — the address is read from the print queue's port (WSD queues follow IP changes, so no hand-entered IP), probed by ping and then TCP 9100/631/80 (catches a powered-off printer), then checks `WorkOffline`, `PrinterStatus`, and `DetectedErrorState` (out of paper, jam, cover open…).
 - **GUI** — view status, print now, generate a preview, open logs. Long operations run in child processes, so the window never freezes.
 - **Desktop shortcut** — with a hand-drawn four-ink-bar icon (16/32/48/64/128 px).
 - **Idempotent** — re-installing the tasks or double-triggering is harmless.
@@ -290,9 +290,9 @@ Copy the `Name` value verbatim into `printerName` in `config.json`.
 
 ```jsonc
 {
-  "printerName": "EPSON XXXX Series",   // required: the queue name from step 2
-  "printerIP": "192.168.1.100",         // network printers: the IP. USB: leave empty
-  "intervalDays": 7,
+  "printerName": "EPSON XXXX Series",   // required: the queue name from step 2 (or pick it in the GUI); prefer a WSD-port queue for network printers
+  "intervalValue": 7,                   // print interval, also editable in the GUI
+  "intervalUnit": "days",               // "days" or "hours"
   "dailyCheckTime": "10:00"
 }
 ```
@@ -319,7 +319,7 @@ Add `-KeepSchedule` to print without advancing the clock (doesn't consume this w
 powershell -ExecutionPolicy Bypass -File .\Install-Task.ps1
 ```
 
-Registers two tasks: a daily check, and a check a few minutes after each logon.
+Registers two tasks: an hourly check, and a check a few minutes after each logon. Changing the interval or printer in the GUI takes effect immediately — no reinstall needed.
 
 **7. Create a desktop shortcut (optional)**
 
@@ -367,9 +367,9 @@ One A4 page, six bands top to bottom, ~98% vertical coverage:
 |---|---|---|
 | `printerName` | — | Print queue name. Required. |
 | `fallbackPrinterName` | `""` | Alternate queue, tried if the primary is missing |
-| `printerIP` | `""` | Network printer IP, used for the ping check. Empty for USB. |
-| `intervalDays` | `7` | Days between prints |
-| `dailyCheckTime` | `"10:00"` | Daily check time |
+| `intervalValue` | `7` | Print interval (editable in the GUI) |
+| `intervalUnit` | `"days"` | `"days"` (1–30) or `"hours"` (1–72). Legacy `intervalDays` still works |
+| `dailyCheckTime` | `"10:00"` | Start time the hourly checks are anchored to |
 | `bootDelayMinutes` | `3` | Delay after logon before checking (lets the network settle) |
 | `retryCount` | `3` | Retries within one check |
 | `retryIntervalMinutes` | `5` | Delay between retries |
@@ -381,11 +381,11 @@ One A4 page, six bands top to bottom, ~98% vertical coverage:
 ### How scheduling works
 
 ```
-Daily trigger (10:00) ─┐
+Hourly trigger        ─┐
                        ├→ Invoke-NozzleCheck.ps1 ─→ read state.json
 Logon trigger (+3min) ─┘                              │
                                                       ↓
-                                    ≥ 7 days since last success?
+                                    ≥ interval since last success?
                                        ├─ no  → skip, exit
                                        └─ yes → check printer readiness
                                                  ├─ offline → log, clock NOT advanced
@@ -397,7 +397,7 @@ Logon trigger (+3min) ─┘                              │
 Two deliberate choices:
 
 - **Only a successful print advances `lastPrintTime`.** Out of paper, a jam, or a powered-off printer never consumes a maintenance cycle — the next trigger just retries.
-- **0.1-day tolerance**: the test is `daysSince >= intervalDays - 0.1`. Without it, "printed at 10:07, checked today at 10:07 = 6.9999 days" would push the print to day 8.
+- **Due tolerance**: the test is `elapsed >= interval - tolerance`, where tolerance is 10% of the interval, capped at 10 minutes. Without it, "printed at 10:00:05, checked at 10:00:02" would miss by seconds and slip a whole check cycle.
 
 ### Troubleshooting
 
@@ -405,7 +405,7 @@ Two deliberate choices:
 |---|---|
 | "config is still a template" | You copied `config.example.json` but haven't set `printerName` |
 | Printer not found | Verify with `Get-Printer`; spaces and parentheses must match exactly |
-| Always reports offline | Check `printerIP`; for USB printers leave it empty or the ping always fails |
+| Reports offline, yet manual prints work | The router most likely gave the printer a new IP and the selected queue uses a fixed-IP port. Pick the queue marked "WSD" in the GUI |
 | Chinese text is mojibake | A `.ps1` lost its UTF-8 BOM — see Encoding notes |
 | Double-clicking the `.vbs` does nothing | The `.vbs` contains non-ASCII bytes — see Encoding notes |
 | Tasks never run | Check Task Scheduler: task exists and runs as the current user; `Install-Task.ps1` must run as Administrator |
